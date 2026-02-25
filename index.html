@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Teachable Machine – Kamera</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+    video, canvas { width: min(420px, 100%); border-radius: 12px; background: #111; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }
+    .card { padding: 12px; border: 1px solid #ddd; border-radius: 12px; width: min(420px, 100%); }
+    .bar { height: 10px; background: #eee; border-radius: 999px; overflow: hidden; }
+    .bar > div { height: 100%; width: 0%; background: #4f46e5; }
+    .muted { color: #555; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Wykrywanie (klasyfikacja) – Teachable Machine</h1>
+  <p class="muted">
+    Kliknij „Start”, zezwól na kamerę, a potem obserwuj wyniki.
+    (Najlepiej działa w Chrome/Edge na Androidzie i Safari/Chrome na iOS).
+  </p>
+
+  <div style="margin: 12px 0;">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <span id="status" class="muted" style="margin-left:10px;"></span>
+  </div>
+
+  <div class="row">
+    <video id="webcam" autoplay playsinline muted></video>
+
+    <div class="card">
+      <h3>Wyniki</h3>
+      <div id="results"></div>
+      <p class="muted" id="hint"></p>
+    </div>
+  </div>
+
+  <!-- TensorFlow.js + Teachable Machine Image -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    // 1) PODMIEŃ TEN URL NA SWÓJ (z exportu TF.js)
+    const MODEL_URL = "https://teachablemachine.withgoogle.com/models/XYZ/";
+
+    let model, maxPredictions;
+    let stream = null;
+    let rafId = null;
+
+    const video = document.getElementById("webcam");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    const hintEl = document.getElementById("hint");
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    function renderEmpty() {
+      resultsEl.innerHTML = "";
+      hintEl.textContent = "Wskazówka: pokaż obiekt wyraźnie na tle, z dobrym światłem.";
+    }
+
+    function renderPredictions(predictions) {
+      // Sortuj malejąco po pewności
+      predictions.sort((a, b) => b.probability - a.probability);
+
+      resultsEl.innerHTML = "";
+      predictions.forEach(p => {
+        const pct = Math.round(p.probability * 100);
+        const row = document.createElement("div");
+        row.style.marginBottom = "10px";
+        row.innerHTML = `
+          <div style="display:flex;justify-content:space-between;gap:10px;">
+            <strong>${p.className}</strong>
+            <span>${pct}%</span>
+          </div>
+          <div class="bar"><div style="width:${pct}%"></div></div>
+        `;
+        resultsEl.appendChild(row);
+      });
+
+      const top = predictions[0];
+      hintEl.textContent = top
+        ? `Najbardziej prawdopodobne: ${top.className} (${Math.round(top.probability*100)}%).`
+        : "";
+    }
+
+    async function loadModel() {
+      setStatus("Wczytuję model…");
+      const modelURL = MODEL_URL + "model.json";
+      const metadataURL = MODEL_URL + "metadata.json";
+      model = await tmImage.load(modelURL, metadataURL);
+      maxPredictions = model.getTotalClasses();
+      setStatus("Model wczytany.");
+    }
+
+    async function startCamera() {
+      setStatus("Uruchamiam kamerę…");
+      const constraints = {
+        video: {
+          facingMode: "environment",  // tylna kamera
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
+        audio: false
+      };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+      setStatus("Kamera działa. Analizuję obraz…");
+    }
+
+    async function predictLoop() {
+      if (!model) return;
+
+      // predict() bierze element HTML (video/canvas/img)
+      const predictions = await model.predict(video);
+      renderPredictions(predictions);
+
+      rafId = requestAnimationFrame(predictLoop);
+    }
+
+    function stopAll() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = null;
+
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+
+      setStatus("Zatrzymano.");
+      renderEmpty();
+
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    startBtn.addEventListener("click", async () => {
+      startBtn.disabled = true;
+      try {
+        renderEmpty();
+        await loadModel();
+        await startCamera();
+        stopBtn.disabled = false;
+        predictLoop();
+      } catch (e) {
+        console.error(e);
+        setStatus("Błąd: nie udało się uruchomić (sprawdź dostęp do kamery i MODEL_URL).");
+        startBtn.disabled = false;
+      }
+    });
+
+    stopBtn.addEventListener("click", stopAll);
+
+    renderEmpty();
+  </script>
+</body>
+</html>
